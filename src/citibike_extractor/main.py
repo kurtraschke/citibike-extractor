@@ -37,44 +37,44 @@ def main():
     input_files: Iterable[Path] = args.input_files
 
     with connect(
-            output_database, config={"storage_compatibility_version": "latest"}
+        output_database, config={"storage_compatibility_version": "latest"}
     ) as con:
         con.sql("INSTALL spatial")
         con.sql("LOAD spatial")
-        con.sql((files("templates") / "schema.sql").read_text())
+        con.sql((files("citibike_extractor.templates") / "schema.sql").read_text())
 
-        for input_file in tqdm(input_files, unit="file"):
-            handle_zip_file(
-                input_file,
-                (
+        with tqdm(input_files, unit="archive") as pb:
+            handler = partial(handle_file, con, pb)
+
+            for input_file in pb:
+                handle_zip_file(
+                    input_file,
                     (
-                        partial(is_valid_csv, input_file),
-                        partial(handle_file, con)
+                        (partial(is_valid_csv, input_file), handler),
+                        (
+                            lambda p: p.full_match(NESTED_ZIP),
+                            partial(handle_nested_zip, handler),
+                        ),
                     ),
-                    (
-                        lambda p: p.full_match(NESTED_ZIP),
-                        partial(handle_nested_zip, con),
-                    ),
-                ),
-            )
+                )
 
 
 def is_valid_csv(input_file: PurePath, p: PurePath):
     return (
-            p.full_match(BARE_CSV)
-            or p.full_match(ONE_LEVEL_NESTED_CSV)
-            or (
-                    input_file.full_match(CAN_HAVE_TWO_LEVEL_NESTED_CSV)
-                    and p.full_match(TWO_LEVEL_NESTED_CSV)
-            )
+        p.full_match(BARE_CSV)
+        or p.full_match(ONE_LEVEL_NESTED_CSV)
+        or (
+            input_file.full_match(CAN_HAVE_TWO_LEVEL_NESTED_CSV)
+            and p.full_match(TWO_LEVEL_NESTED_CSV)
+        )
     ) and not p.full_match(IGNORE_FILES)
 
 
 def handle_zip_file(
-        input_file: str | PathLike[str] | IO[bytes],
-        operations: Iterable[
-            Tuple[Callable[[PurePath], bool], Callable[[ZipFile, ZipInfo], None]]
-        ],
+    input_file: str | PathLike[str] | IO[bytes],
+    operations: Iterable[
+        Tuple[Callable[[PurePath], bool], Callable[[ZipFile, ZipInfo], None]]
+    ],
 ):
     with ZipFile(input_file, "r") as zf:
         for zi in zf.infolist():
@@ -85,14 +85,16 @@ def handle_zip_file(
                     handler(zf, zi)
 
 
-def handle_nested_zip(con: DuckDBPyConnection, zf: ZipFile, zi: ZipInfo):
+def handle_nested_zip(
+    handler: Callable[[ZipFile, ZipInfo], None], zf: ZipFile, zi: ZipInfo
+):
     with zf.open(zi) as nz:
         handle_zip_file(
             nz,
             (
                 (
                     lambda p: p.full_match(BARE_CSV),
-                    partial(handle_file, con),
+                    handler,
                 ),
             ),
         )
@@ -156,8 +158,12 @@ FORMATS_BY_HEADER: Mapping[tuple[str, ...], FileFormatGeneration] = {
 }
 
 SQL_TEMPLATES = {
-    FileFormatGeneration.ONE: (files("citibike_extractor.templates") / "f1-import.sql").read_text(),
-    FileFormatGeneration.TWO: (files("citibike_extractor.templates") / "f2-import.sql").read_text(),
+    FileFormatGeneration.ONE: (
+        files("citibike_extractor.templates") / "f1-import.sql"
+    ).read_text(),
+    FileFormatGeneration.TWO: (
+        files("citibike_extractor.templates") / "f2-import.sql"
+    ).read_text(),
 }
 
 READ_CSV_ARGS = {
@@ -203,7 +209,7 @@ READ_CSV_ARGS = {
 }
 
 
-def handle_file(con: DuckDBPyConnection, zf: ZipFile, zi: ZipInfo):
+def handle_file(con: DuckDBPyConnection, pb: tqdm, zf: ZipFile, zi: ZipInfo):
     with zf.open(zi) as f, io.TextIOWrapper(f) as w:
         cr = csv.reader(w)
         header_row = next(cr)
@@ -216,6 +222,12 @@ def handle_file(con: DuckDBPyConnection, zf: ZipFile, zi: ZipInfo):
             con.read_csv(f, na_values=["NULL", r"\N", ""], **READ_CSV_ARGS[fmt])
         ) as input_table,  # noqa: F841
     ):
+        pb.set_postfix(
+            {
+                "rows": con.table("tripdata").count("*").fetchone()[0],
+                "file": PurePath(zi.filename).name,
+            }
+        )
         con.sql(SQL_TEMPLATES[fmt])
 
 
