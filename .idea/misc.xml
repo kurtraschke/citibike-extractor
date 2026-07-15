@@ -3,7 +3,7 @@
   <component name="Black">
     <option name="sdkName" value="uv (citibike-extractor)" />
   </component>
-  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" default="true">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" default="true" project-jdk-name="uv (citibike-extractor)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/out" />
   </component>
 </project>
