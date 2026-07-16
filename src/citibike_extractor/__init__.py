@@ -1,1 +1,1 @@
-from .main import main
+from citibike_extractor.main import main as main

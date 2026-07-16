@@ -15,6 +15,8 @@ create table tripdata
     bike_id                VARCHAR,
     birth_year             USMALLINT,
     gender                 UTINYINT,
+    archive                VARCHAR,
+    filename               VARCHAR,
     started_year           USMALLINT GENERATED ALWAYS AS (EXTRACT('year' FROM started_at)) VIRTUAL,
     started_month          UTINYINT GENERATED ALWAYS AS (EXTRACT('month' FROM started_at)) VIRTUAL
 );

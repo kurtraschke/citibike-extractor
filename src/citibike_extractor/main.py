@@ -2,17 +2,23 @@ import argparse
 import contextlib
 import csv
 import io
+import logging
 from collections.abc import Callable
-from enum import Enum
 from functools import partial
 from importlib.resources import files
 from os import PathLike
 from pathlib import Path, PurePath
-from typing import Iterable, Mapping, Tuple, IO
+from typing import Iterable, Tuple, IO
 from zipfile import ZipFile, ZipInfo
 
+import duckdb
 from duckdb import DuckDBPyConnection, connect
 from tqdm import tqdm
+from tqdm.contrib.logging import tqdm_logging_redirect
+
+from citibike_extractor.constants import FORMATS_BY_HEADER, SQL_TEMPLATES, READ_CSV_ARGS
+
+LOG = logging.getLogger(__name__)
 
 BARE_CSV = "*.csv"
 ONE_LEVEL_NESTED_CSV = "*-citibike-tripdata/*.csv"
@@ -28,10 +34,23 @@ IGNORE_FILES = "2018-citibike-tripdata/201804-citibike-tripdata_[12].csv"
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("output_database", type=Path)
-    parser.add_argument("input_files", nargs="*", type=Path)
+    parser.add_argument(
+        "-l",
+        "--log-level",
+        default="INFO",
+        choices=[v for (k, v) in logging._levelToName.items() if k != logging.NOTSET],
+        type=str.upper,
+        help="Set logging level (default: INFO)",
+    )
+
+    parser.add_argument(
+        "output_database", type=Path, help="Path to output DuckDB database"
+    )
+    parser.add_argument("input_files", nargs="*", type=Path, help="Path to input files")
 
     args = parser.parse_args()
+
+    LOG.setLevel(args.log_level)
 
     output_database: Path = args.output_database
     input_files: Iterable[Path] = args.input_files
@@ -43,8 +62,10 @@ def main():
         con.sql("LOAD spatial")
         con.sql((files("citibike_extractor.templates") / "schema.sql").read_text())
 
-        with tqdm(input_files, unit="archive") as pb:
-            handler = partial(handle_file, con, pb)
+        with tqdm_logging_redirect(
+            sorted(input_files, key=lambda f: f.name), unit="archive"
+        ) as pb:
+            handler = partial(handle_csv_file, con, pb)
 
             for input_file in pb:
                 handle_zip_file(
@@ -59,15 +80,54 @@ def main():
                 )
 
 
+def b(v: bool):
+    return "✅" if v else "❎"
+
+
 def is_valid_csv(input_file: PurePath, p: PurePath):
+    """
+    Test if a pathname in a Zip archive is a 'valid' CSV file.
+
+    Valid CSV files are those which can be ingested without fear of causing
+    duplicates. This includes all bare CSV files (in the root of the archive)
+    and those nested one level deep in a folder.
+
+    In some cases, CSV files nested two levels deep are permitted, but this is
+    gated on the name of the enclosing Zip archive.
+
+    Certain files are not to be imported even if they match one of the preceding
+    rules.
+    """
+
+    bare_csv = p.full_match(BARE_CSV)
+    one_level_nested_csv = p.full_match(ONE_LEVEL_NESTED_CSV)
+
+    can_have_two_level_nested_csv = input_file.full_match(CAN_HAVE_TWO_LEVEL_NESTED_CSV)
+    two_level_nested_csv = p.full_match(TWO_LEVEL_NESTED_CSV)
+
+    is_ignored = p.full_match(IGNORE_FILES)
+
+    LOG.debug(
+        "%s %s %s %s %s\t%s\t\t%s",
+        *map(
+            b,
+            (
+                bare_csv,
+                one_level_nested_csv,
+                can_have_two_level_nested_csv,
+                two_level_nested_csv,
+                is_ignored,
+            ),
+        ),
+        input_file.name,
+        p,
+    )
+
     return (
-        p.full_match(BARE_CSV)
-        or p.full_match(ONE_LEVEL_NESTED_CSV)
-        or (
-            input_file.full_match(CAN_HAVE_TWO_LEVEL_NESTED_CSV)
-            and p.full_match(TWO_LEVEL_NESTED_CSV)
-        )
-    ) and not p.full_match(IGNORE_FILES)
+        bare_csv
+        or one_level_nested_csv
+        or (can_have_two_level_nested_csv and two_level_nested_csv)
+    ) and not is_ignored
 
 
 def handle_zip_file(
@@ -77,7 +137,7 @@ def handle_zip_file(
     ],
 ):
     with ZipFile(input_file, "r") as zf:
-        for zi in zf.infolist():
+        for zi in sorted(zf.infolist(), key=lambda f: f.filename):
             p = PurePath(zi.filename)
 
             for entry_test, handler in operations:
@@ -86,7 +146,7 @@ def handle_zip_file(
 
 
 def handle_nested_zip(
-    handler: Callable[[ZipFile, ZipInfo], None], zf: ZipFile, zi: ZipInfo
+    csv_handler: Callable[[ZipFile, ZipInfo], None], zf: ZipFile, zi: ZipInfo
 ):
     with zf.open(zi) as nz:
         handle_zip_file(
@@ -94,122 +154,13 @@ def handle_nested_zip(
             (
                 (
                     lambda p: p.full_match(BARE_CSV),
-                    handler,
+                    csv_handler,
                 ),
             ),
         )
 
 
-class FileFormatGeneration(Enum):
-    ONE = 1
-    TWO = 2
-
-
-FORMATS_BY_HEADER: Mapping[tuple[str, ...], FileFormatGeneration] = {
-    (
-        "tripduration",
-        "starttime",
-        "stoptime",
-        "start station id",
-        "start station name",
-        "start station latitude",
-        "start station longitude",
-        "end station id",
-        "end station name",
-        "end station latitude",
-        "end station longitude",
-        "bikeid",
-        "usertype",
-        "birth year",
-        "gender",
-    ): FileFormatGeneration.ONE,
-    (
-        "Trip Duration",
-        "Start Time",
-        "Stop Time",
-        "Start Station ID",
-        "Start Station Name",
-        "Start Station Latitude",
-        "Start Station Longitude",
-        "End Station ID",
-        "End Station Name",
-        "End Station Latitude",
-        "End Station Longitude",
-        "Bike ID",
-        "User Type",
-        "Birth Year",
-        "Gender",
-    ): FileFormatGeneration.ONE,
-    (
-        "ride_id",
-        "rideable_type",
-        "started_at",
-        "ended_at",
-        "start_station_name",
-        "start_station_id",
-        "end_station_name",
-        "end_station_id",
-        "start_lat",
-        "start_lng",
-        "end_lat",
-        "end_lng",
-        "member_casual",
-    ): FileFormatGeneration.TWO,
-}
-
-SQL_TEMPLATES = {
-    FileFormatGeneration.ONE: (
-        files("citibike_extractor.templates") / "f1-import.sql"
-    ).read_text(),
-    FileFormatGeneration.TWO: (
-        files("citibike_extractor.templates") / "f2-import.sql"
-    ).read_text(),
-}
-
-READ_CSV_ARGS = {
-    FileFormatGeneration.ONE: {
-        "columns": {
-            "trip_duration": "INTERVAL",
-            "start_time": "VARCHAR",
-            "stop_time": "VARCHAR",
-            "start_station_id": "VARCHAR",
-            "start_station_name": "VARCHAR",
-            "start_station_latitude": "DOUBLE",
-            "start_station_longitude": "DOUBLE",
-            "end_station_id": "VARCHAR",
-            "end_station_name": "VARCHAR",
-            "end_station_latitude": "DOUBLE",
-            "end_station_longitude": "DOUBLE",
-            "bike_id": "VARCHAR",
-            "user_type": "VARCHAR",
-            "birth_year": "VARCHAR",
-            "gender": "INTEGER",
-        },
-        "quotechar": '"',
-        "header": False,
-        "skiprows": 1,
-    },
-    FileFormatGeneration.TWO: {
-        "columns": {
-            "ride_id": "VARCHAR",
-            "rideable_type": "VARCHAR",
-            "started_at": "TIMESTAMP",
-            "ended_at": "TIMESTAMP",
-            "start_station_name": "VARCHAR",
-            "start_station_id": "VARCHAR",
-            "end_station_name": "VARCHAR",
-            "end_station_id": "VARCHAR",
-            "start_lat": "DOUBLE",
-            "start_lng": "DOUBLE",
-            "end_lat": "DOUBLE",
-            "end_lng": "DOUBLE",
-            "member_casual": "VARCHAR",
-        },
-    },
-}
-
-
-def handle_file(con: DuckDBPyConnection, pb: tqdm, zf: ZipFile, zi: ZipInfo):
+def handle_csv_file(con: DuckDBPyConnection, pb: tqdm, zf: ZipFile, zi: ZipInfo):
     with zf.open(zi) as f, io.TextIOWrapper(f) as w:
         cr = csv.reader(w)
         header_row = next(cr)
@@ -220,14 +171,24 @@ def handle_file(con: DuckDBPyConnection, pb: tqdm, zf: ZipFile, zi: ZipInfo):
         zf.open(zi) as f,
         contextlib.closing(
             con.read_csv(f, na_values=["NULL", r"\N", ""], **READ_CSV_ARGS[fmt])
-        ) as input_table,  # noqa: F841
+        ) as raw_input_table,
     ):
+        archive_filename = PurePath(zf.filename).name
+        entry_filename = PurePath(zi.filename).name
+
+        input_table = raw_input_table.project(  # noqa: F841
+            duckdb.StarExpression(),
+            duckdb.ConstantExpression(archive_filename).alias("archive"),
+            duckdb.ConstantExpression(entry_filename).alias("filename"),
+        )
+
         pb.set_postfix(
             {
                 "rows": con.table("tripdata").count("*").fetchone()[0],
-                "file": PurePath(zi.filename).name,
+                "file": entry_filename,
             }
         )
+
         con.sql(SQL_TEMPLATES[fmt])
 
 

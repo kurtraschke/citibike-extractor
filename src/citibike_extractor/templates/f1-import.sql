@@ -1,5 +1,5 @@
-insert into tripdata by name (
-    select try_strptime(start_time, [
+INSERT INTO tripdata BY NAME (
+    SELECT try_strptime(start_time, [
                '%Y-%m-%d %H:%M:%S',
                '%Y-%m-%d %H:%M:%S.%f',
                '%m/%d/%Y %H:%M:%S',
@@ -19,9 +19,11 @@ insert into tripdata by name (
            end_station_name,
            ST_MakePoint(end_station_longitude, end_station_latitude) end_station_location,
            bike_id,
-           case user_type when 'Subscriber' then 'member' when 'Customer' then 'casual' else NULL end member_casual,
+           CASE user_type WHEN 'Subscriber' THEN 'member' WHEN 'Customer' THEN 'casual' ELSE NULL END member_casual,
            birth_year,
            nullif(gender, 0) gender,
-           case when started_at < '2018-08-20' then 'classic_bike' else null end rideable_type,
-           upper(to_hex(hash(rideable_type, started_at, ended_at, trip_duration, start_station_id, start_station_name, start_station_location, end_station_location, member_casual))) ride_id
-    from input_table);
+           CASE WHEN started_at < '2018-08-20' THEN 'classic_bike' ELSE NULL END rideable_type,
+           upper(to_hex(hash(rideable_type, started_at, ended_at, trip_duration, start_station_id, start_station_name, start_station_location, end_station_id, end_station_name, end_station_location, member_casual))) ride_id,
+           archive,
+           filename
+    FROM input_table);
