@@ -3,12 +3,13 @@ name = "citibike-extractor"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+license = "BlueOak-1.0.0"
+license-files = ["LICENSE.md"]
 requires-python = ">=3.14"
 dependencies = [
     "duckdb>=1.5.4",
     "fsspec>=2026.6.0",
     "tqdm>=4.68.4",
-    "ty>=0.0.58",
 ]
 
 [dependency-groups]

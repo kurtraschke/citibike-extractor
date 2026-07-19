@@ -10,7 +10,6 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "tqdm" },
-    { name = "ty" },
 ]
 
 [package.dev-dependencies]
@@ -24,7 +23,6 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.5.4" },
     { name = "fsspec", specifier = ">=2026.6.0" },
     { name = "tqdm", specifier = ">=4.68.4" },
-    { name = "ty", specifier = ">=0.0.58" },
 ]
 
 [package.metadata.requires-dev]

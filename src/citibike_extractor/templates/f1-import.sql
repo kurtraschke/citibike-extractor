@@ -26,4 +26,5 @@ INSERT INTO tripdata BY NAME (
            upper(to_hex(hash(rideable_type, started_at, ended_at, trip_duration, start_station_id, start_station_name, start_station_location, end_station_id, end_station_name, end_station_location, member_casual))) ride_id,
            archive,
            filename
-    FROM input_table);
+    FROM input_table
+    );

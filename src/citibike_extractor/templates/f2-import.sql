@@ -16,4 +16,5 @@ INSERT INTO tripdata BY NAME (
            NULL gender,
            archive,
            filename
-    FROM input_table);
+    FROM input_table
+    );
