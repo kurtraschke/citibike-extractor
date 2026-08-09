@@ -10,7 +10,7 @@ Usage
 
 (We assume you have [`rclone`](https://rclone.org/) and [`uv`](https://docs.astral.sh/uv/) installed.)
 
-1. Download the contents of the `tripdata` S3 bucket into a temporary directory: `rclone copy :s3:tripdata tripdata --filter "+ *-citibike-tripdata*.zip`
+1. Download the contents of the `tripdata` S3 bucket into a temporary directory: `rclone copy :s3:tripdata tripdata --filter "+ *-citibike-tripdata*.zip" --filter "- *"`
 2. Run `citibike-extractor`: `uvx --from git+https://github.com/kurtraschke/citibike-extractor.git citibike-extractor tripdata.db tripdata/*.zip`
 3. Optionally, open the resulting DuckDB database: `duckdb -ui tripdata.db`
 
